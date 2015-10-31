@@ -15,11 +15,14 @@
 (d/transact! conn
   [{:db/id -1
     :app/title "Hello, DataScript!"
-    :app/count 0}])
+    :app/count 0}
+   {:db/id -2
+    :app/title "Another thing"
+    :app/count 50}])
 
 (defmulti read om/dispatch)
 
-(defmethod read :app/counter
+(defmethod read :app/counters
   [{:keys [state selector]} _ _]
   {:value (d/q '[:find [(pull ?e ?selector) ...]
                  :in $ ?selector
@@ -32,13 +35,12 @@
   [{:keys [state]} _ {:keys [db/id] :as entity}]
   {:action
    (fn []
-     (d/transact! state
-                    [(update-in entity [:app/count] inc)]))})
+     (d/transact! state [(update-in entity [:app/count] inc)]))})
 
 (defui Counter
   static om/Ident
   (ident [this {:keys [db/id]}]
-    [:by-id id])
+    [:counter/by-id id])
   static om/IQuery
   (query [this]
     [:db/id :app/title :app/count])
@@ -55,29 +57,42 @@
                    `[(app/increment ~entity)]))}
           "Click me!")))))
 
-(def counter (om/factory Counter))
+(def counter (om/factory Counter {:keyfn :db/id}))
+
+(defui CounterList
+  Object
+  (render [this]
+    (println "Render CounterList" (-> this om/path))
+    (let [list (om/props this)]
+      (apply dom/ul nil
+        (map counter list)))))
+
+(def list-view (om/factory CounterList))
 
 (defui App
   static om/IQuery
   (query [this]
-         [{:app/counter (om/get-query Counter)}])
+     `[{:app/counters ~(om/get-query Counter)}])
   Object
   (render [this]
-    (apply dom/ul nil (map counter (om/props this)))))
+    (list-view (:app/counters (om/props this)))))
 
-(def reconciler
-  (om/reconciler
-    {:state conn
-     :parser (om/parser {:read read :mutate mutate})}))
+(def parser (om/parser {:read read :mutate mutate}))
+
+(def reconciler (om/reconciler {:state conn :parser parser}))
 
 (defn main []
-  (println "Hello world!")
+  (println "Running main")
   (if-let [node (gdom/getElement "app")]
-    (om/add-root! reconciler Counter node)))
+    (om/add-root! reconciler App node)))
 
 (main)
 
 (comment
 
-  (d/q conn '[:find ?a])
+(d/q '[:find ?e ?title ?count
+       :where
+       [?e :app/title ?title]
+       [?e :app/count ?count]] (d/db conn))
+
 )
