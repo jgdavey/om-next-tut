@@ -10,85 +10,144 @@
   (:import [goog.crypt Sha256]))
 
 (enable-console-print!)
-(def conn (d/create-conn {}))
 
-(d/transact! conn
-  [{:db/id -1
-    :app/title "Hello, DataScript!"
-    :app/count 0}
-   {:db/id -2
-    :app/title "Another thing"
-    :app/count 50}])
+(def init-data
+  {:dashboard/items
+   [{:id 0 :type :dashboard/post
+     :author "Laura Smith"
+     :title "A Post!"
+     :content "Lorem ipsum dolor sit amet, quem atomorum te quo"
+     :favorites 0}
+    {:id 1 :type :dashboard/photo
+     :title "A Photo!"
+     :image "photo.jpg"
+     :caption "Lorem ipsum"
+     :favorites 0}
+    {:id 2 :type :dashboard/post
+     :author "Jim Jacobs"
+     :title "Another Post!"
+     :content "Lorem ipsum dolor sit amet, quem atomorum te quo"
+     :favorites 0}
+    {:id 3 :type :dashboard/graphic
+     :title "Charts and Stufff!"
+     :image "chart.jpg"
+     :favorites 0}
+    {:id 4 :type :dashboard/post
+     :author "May Fields"
+     :title "Yet Another Post!"
+     :content "Lorem ipsum dolor sit amet, quem atomorum te quo"
+     :favorites 0}]})
+
+(defui Post
+  static om/IQuery
+  (query [this]
+    [:id :type :title :author :content])
+  Object
+  (render [this]
+    (let [{:keys [title author content] :as props} (om/props this)]
+      (dom/div nil
+        (dom/h3 nil title)
+        (dom/h4 nil author)
+        (dom/p nil content)))))
+
+(def post (om/factory Post))
+
+(defui Photo
+  static om/IQuery
+  (query [this]
+    [:id :type :title :image :caption])
+  Object
+  (render [this]
+    (let [{:keys [title image caption]} (om/props this)]
+      (dom/div nil
+        (dom/h3 nil (str "Photo: " title))
+        (dom/div nil image)
+        (dom/p nil "Caption: ")))))
+
+(def photo (om/factory Photo))
+
+(defui Graphic
+  static om/IQuery
+  (query [this]
+    [:id :type :title :image])
+  Object
+  (render [this]
+    (let [{:keys [title image]} (om/props this)]
+      (dom/div nil
+        (dom/h3 nil (str "Graphic: " title))
+        (dom/div nil image)))))
+
+(def graphic (om/factory Graphic))
+
+(defui DashboardItem
+  static om/Ident
+  (ident [this {:keys [id type]}]
+    [type id])
+  static om/IQuery
+  (query [this]
+    (zipmap
+      [:dashboard/post :dashboard/photo :dashboard/graphic]
+      (map #(conj % :favorites)
+        [(om/get-query Post)
+         (om/get-query Photo)
+         (om/get-query Graphic)])))
+  Object
+  (render [this]
+    (let [{:keys [id type favorites] :as props} (om/props this)]
+      (dom/li
+        #js {:style #js {:padding 10 :borderBottom "1px solid black"}}
+        (dom/div nil
+          (({:dashboard/post    post
+             :dashboard/photo   photo
+             :dashboard/graphic graphic} type)
+            (om/props this)))
+        (dom/div nil
+          (dom/p nil (str "Favorites: " favorites))
+          (dom/button
+            #js {:onClick
+                 (fn [e]
+                   (om/transact! this
+                     `[(dashboard/favorite {:ref [~type ~id]})]))}
+            "Favorite!"))))))
+
+(def dashboard-item (om/factory DashboardItem))
+
+(defui Dashboard
+  static om/IQuery
+  (query [this]
+    [{:dashboard/items (om/get-query DashboardItem)}])
+  Object
+  (render [this]
+    (let [{:keys [dashboard/items]} (om/props this)]
+      (apply dom/ul
+        #js {:style #js {:padding 0}}
+        (map dashboard-item items)))))
 
 (defmulti read om/dispatch)
 
-(defmethod read :app/counters
-  [{:keys [state selector]} _ _]
-  {:value (d/q '[:find [(pull ?e ?selector) ...]
-                 :in $ ?selector
-                 :where [?e :app/title]]
-            (d/db state) selector)})
+(defmethod read :dashboard/items
+  [{:keys [state]} k _]
+  (let [st @state]
+    {:value (into [] (map #(get-in st %)) (get st k))}))
 
 (defmulti mutate om/dispatch)
 
-(defmethod mutate 'app/increment
-  [{:keys [state]} _ {:keys [db/id] :as entity}]
+(defmethod mutate 'dashboard/favorite
+  [{:keys [state]} k {:keys [ref]}]
   {:action
    (fn []
-     (d/transact! state [(update-in entity [:app/count] inc)]))})
+     (swap! state update-in (conj ref :favorites) inc))})
 
-(defui Counter
-  static om/Ident
-  (ident [this {:keys [db/id]}]
-    [:counter/by-id id])
-  static om/IQuery
-  (query [this]
-    [:db/id :app/title :app/count])
-  Object
-  (render [this]
-    (let [{:keys [app/title app/count] :as entity} (om/props this)]
-      (dom/div nil
-        (dom/h2 nil title)
-        (dom/span nil (str "Count: " count))
-        (dom/button
-          #js {:onClick
-               (fn [e]
-                 (om/transact! this
-                   `[(app/increment ~entity)]))}
-          "Click me!")))))
+(def reconciler
+  (om/reconciler
+    {:state  init-data
+     :parser (om/parser {:read read :mutate mutate})}))
 
-(def counter (om/factory Counter {:keyfn :db/id}))
-
-(defui CounterList
-  Object
-  (render [this]
-    (println "Render CounterList" (-> this om/path))
-    (let [list (om/props this)]
-      (apply dom/ul nil
-        (map counter list)))))
-
-(def list-view (om/factory CounterList))
-
-(defui App
-  static om/IQuery
-  (query [this]
-     `[{:app/counters ~(om/get-query Counter)}])
-  Object
-  (render [this]
-    (list-view (:app/counters (om/props this)))))
-
-(def parser (om/parser {:read read :mutate mutate}))
-
-(def reconciler (om/reconciler {:state conn :parser parser}))
-
-(defn main []
-  (println "Running main")
-  (if-let [node (gdom/getElement "app")]
-    (om/add-root! reconciler App node)))
-
-(main)
+(om/add-root! reconciler Dashboard (gdom/getElement "app"))
 
 (comment
+
+(om/tree->db Dashboard init-data true)
 
 (d/q '[:find ?e ?title ?count
        :where
